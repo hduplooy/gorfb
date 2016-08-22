@@ -2,13 +2,18 @@
 package gorfb
 
 import (
+	"bytes"
+	"crypto/des"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 )
 
 const (
-	PROTOCOL = "RFB 003.008\n"
+	PROTOCOL  = "RFB 003.008\n"
+	AUTH_FAIL = "Authentication Failure"
 )
 
 // PixelFormat information as required by protocol
@@ -27,18 +32,28 @@ type PixelFormat struct {
 
 // RFBServer is the basic information that we need to start a RFB
 type RFBServer struct {
-	Port        string           // On which port do we start the server (5900 is used as default)
-	Width       int              // Pixel Width of the FrameBuffer
-	Height      int              // Pixel Height of the FrameBuffer
-	PixelFormat PixelFormat      // The pixel format used to represent pixel colors
-	BufferName  string           // A name describing the buffer
-	Handler     RFBServerHandler // The handler that will handle client requests
+	// On which port do we start the server (5900 is used as default)
+	Port string
+	// Pixel Width of the FrameBuffer
+	Width int
+	// Pixel Height of the FrameBuffer
+	Height      int
+	PixelFormat PixelFormat
+	BufferName  string
+	// The handler that will handle client requests
+	Handler RFBServerHandler
+	// Is authentication to be use
+	Authenticate bool
+	// If authentication is to be used, AuthText is the string to authenticate against
+	AuthText string
 }
 
 // RFBConn is created when a successful TCP/IP connection was made with the client
 type RFBConn struct {
-	Server *RFBServer // Link to the server info that was used to create this connection
-	Conn   net.Conn   // The Socket connection to the client
+	// Link to the server info that was used to create this connection
+	Server *RFBServer
+	// The Socket connection to the client
+	Conn net.Conn
 }
 
 // RFBServerHandler is an interface with the function to handle requests
@@ -82,52 +97,116 @@ func (fb *RFBConn) agreeProtocol() bool {
 	if err != nil {
 		log.Printf("Error sending server protocol: %s\n", err.Error())
 		return false
-	} else if sndsz != len(PROTOCOL) {
+	}
+	if sndsz != len(PROTOCOL) {
 		log.Println("Full protocol version was not sent to client!")
 		return false
-	} else {
-		buf := make([]byte, 20)
-		sz, err := fb.Conn.Read(buf)
-		if err != nil {
-			log.Printf("Error receiving client protocol: %s\n", err.Error())
-			return false
-		} else if string(buf[:sz]) != PROTOCOL {
-			log.Println("The client doesn't support RFB3.8!")
-			return false
-		} else {
-			return true
-		}
 	}
+	buf := make([]byte, 20)
+	sz, err := fb.Conn.Read(buf)
+	if err != nil {
+		log.Printf("Error receiving client protocol: %s\n", err.Error())
+		return false
+	}
+	if string(buf[:sz]) != PROTOCOL {
+		log.Println("The client doesn't support RFB3.8!")
+		return false
+	}
+	return true
+
+}
+
+// fixDesKeyByte is used to mirror a byte's bits
+// This is not clearly indicated by the document, but is in actual fact used
+func fixDesKeyByte(val byte) byte {
+	var newval byte = 0
+	for i := 0; i < 8; i++ {
+		newval <<= 1
+		newval += (val & 1)
+		val >>= 1
+	}
+	return newval
+}
+
+// fixDesKey will make sure that exactly 8 bytes is used either by truncating or padding with nulls
+// The bytes are then bit mirrored and returned
+func fixDesKey(key string) []byte {
+	tmp := []byte(key)
+	buf := make([]byte, 8)
+	if len(tmp) <= 8 {
+		copy(buf, tmp)
+	} else {
+		copy(buf, tmp[:8])
+	}
+	for i := 0; i < 8; i++ {
+		buf[i] = fixDesKeyByte(buf[i])
+	}
+	return buf
 }
 
 // agreeSecurity does the agreement on the security between server and client
 // Currently only no auth is used, it will be changed shortly
 func (fb *RFBConn) agreeSecurity() bool {
-	buf := make([]byte, 4)
-	SetUint16(buf, 0, uint16(0x0101))
+	buf := make([]byte, 8+len([]byte(AUTH_FAIL)))
+	buf[0] = 1 // Two types
+	if fb.Server.Authenticate {
+		buf[1] = 2 // Client must authenticate
+	} else {
+		buf[1] = 1 // No authentication
+	}
 	sndsz, err := fb.Conn.Write(buf[:2])
 	if sndsz != 2 || err != nil {
 		log.Printf("Error sending security types: %s\n", err.Error())
 		return false
-	} else {
-		log.Printf("Security types sent\n")
-		sz, err := fb.Conn.Read(buf[:1])
-		if sz != 1 || err != nil {
-			log.Printf("Error reading security type from client: %s\n", err.Error())
+	}
+	sz, err := fb.Conn.Read(buf[:1])
+	if sz != 1 || err != nil {
+		log.Printf("Error reading security type from client: %s\n", err.Error())
+		return false
+	}
+	log.Printf("Security type %d requested by client\n", buf[0])
+	if fb.Server.Authenticate {
+		rand.Read(buf[:16]) // Random 16 bytes in buf
+		sndsz, err = fb.Conn.Write(buf[:16])
+		if err != nil {
+			log.Printf("Error sending challenge to client: %s\n", err.Error())
 			return false
-		} else {
-			log.Printf("Security type received from client: %d\n", buf[0])
-			SetUint32(buf, 0, 0)
-			sndsz, err = fb.Conn.Write(buf[:4])
-			if sndsz != 4 || err != nil {
-				log.Printf("Error sending security successful notification: %s\n", err.Error())
-				return false
-			} else {
-				log.Printf("Security successful notification sent!\n")
-				return true
-			}
+		}
+		if sndsz != 16 {
+			log.Printf("The full 16 byte challenge was not sent!\n")
+			return false
+		}
+		buf2 := make([]byte, 16)
+		_, err := fb.Conn.Read(buf2)
+		if err != nil {
+			log.Printf("The authentication result was not read: %s\n", err.Error())
+			return false
+		}
+		bk, err := des.NewCipher([]byte(fixDesKey(fb.Server.AuthText)))
+		if err != nil {
+			log.Printf("Error generating authentication cipher: %s\n", err.Error())
+			return false
+		}
+		buf3 := make([]byte, 16)
+		bk.Encrypt(buf3, buf)               //Encrypt first 8 bytes
+		bk.Encrypt(buf3[8:], buf[8:])       // Encrypt second 8 bytes
+		if bytes.Compare(buf2, buf3) != 0 { // If the result does not decrypt correctly to what we sent then a problem
+			SetUint32(buf, 0, 1)
+			SetUint32(buf, 4, uint32(len([]byte(AUTH_FAIL))))
+			copy(buf[8:], []byte(AUTH_FAIL))
+			fb.Conn.Write(buf)
+			return false
 		}
 	}
+	// Authentication was either none or it was successful
+	SetUint32(buf, 0, 0)
+	sndsz, err = fb.Conn.Write(buf[:4])
+	if sndsz != 4 || err != nil {
+		log.Printf("Error sending security successful notification: %s\n", err.Error())
+		return false
+	}
+	log.Printf("Security successful notification sent!\n")
+	return true
 
 }
 
@@ -311,14 +390,33 @@ func (fb *RFBConn) SendRectangle(x, y, width, height int, buf []byte) error {
 // StartServer will start a server waiting for connections on the port as specified by the RFBServer port
 // If Port is missing use the default of 5900
 // For each connection handshaking is done and initialization and then client requests are handled and send to the Handler
-func (rfb *RFBServer) StartServer() {
+func (rfb *RFBServer) StartServer() error {
 	if rfb.Port == "" {
 		rfb.Port = "5900"
 	}
+	if rfb.Authenticate && len(rfb.AuthText) == 0 {
+		return errors.New("For authentication a authentication string must be provided!")
+	}
+	if rfb.Width <= 0 || rfb.Height <= 0 {
+		return errors.New("Width and Height must be provided in RFBServer and they must be positive values!")
+	}
+	if rfb.Handler == nil {
+		return errors.New("A handler must be provided!")
+	}
+	if rfb.PixelFormat.BitsPerPixel != 8 && rfb.PixelFormat.BitsPerPixel != 16 && rfb.PixelFormat.BitsPerPixel != 24 && rfb.PixelFormat.BitsPerPixel != 32 {
+		return errors.New("Only 8, 16, 24 and 32 bits per pixel allowed")
+	}
+	if rfb.PixelFormat.TrueColor == 1 {
+		if rfb.PixelFormat.RedMax == 0 || rfb.PixelFormat.GreenMax == 0 || rfb.PixelFormat.BlueMax == 0 {
+			return errors.New("Provide maximum values for red, green and blue in the PixelFormat structure")
+		}
+		if rfb.PixelFormat.RedShift == rfb.PixelFormat.GreenShift || rfb.PixelFormat.RedShift == rfb.PixelFormat.BlueShift || rfb.PixelFormat.GreenShift == rfb.PixelFormat.BlueShift {
+			return errors.New("None of the shifts can be the same!")
+		}
+	}
 	ln, err := net.Listen("tcp", ":"+rfb.Port)
 	if err != nil {
-		log.Printf("Error listening on port %s: %s\n", rfb.Port, err.Error())
-		return
+		return errors.New(fmt.Sprintf("Error listening on port %s: %s", rfb.Port, err.Error()))
 	}
 	for {
 		con, err := ln.Accept()
@@ -329,4 +427,5 @@ func (rfb *RFBServer) StartServer() {
 			go rfbcon.process()
 		}
 	}
+	return nil
 }
