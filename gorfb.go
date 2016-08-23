@@ -102,7 +102,7 @@ func (fb *RFBConn) agreeProtocol() bool {
 		log.Println("Full protocol version was not sent to client!")
 		return false
 	}
-	buf := make([]byte, 20)
+	buf := make([]byte, 12)
 	sz, err := fb.Conn.Read(buf)
 	if err != nil {
 		log.Printf("Error receiving client protocol: %s\n", err.Error())
@@ -148,7 +148,7 @@ func fixDesKey(key string) []byte {
 // Currently only no auth is used, it will be changed shortly
 func (fb *RFBConn) agreeSecurity() bool {
 	buf := make([]byte, 8+len([]byte(AUTH_FAIL)))
-	buf[0] = 1 // Two types
+	buf[0] = 1
 	if fb.Server.Authenticate {
 		buf[1] = 2 // Client must authenticate
 	} else {
@@ -259,12 +259,12 @@ func (fb *RFBConn) processClientRequest() {
 		if err == nil {
 			switch buf[0] {
 			case 0: // Set Pixel Format
-				_, err := fb.Conn.Read(buf[:16]) // Read the 16 bytes for the pixel format
+				_, err := fb.Conn.Read(buf[:19]) // Read the 16 bytes for the pixel format + 3 lead padding bytes
 				if err != nil {
 					log.Printf("Error reading info: %s\n", err.Error())
 					return
 				}
-				pf := PixelFormat{buf[0], buf[1], buf[2], buf[3], GetUint16(buf, 4), GetUint16(buf, 6), GetUint16(buf, 8), buf[10], buf[11], buf[12]}
+				pf := PixelFormat{buf[3], buf[4], buf[5], buf[6], GetUint16(buf, 7), GetUint16(buf, 9), GetUint16(buf, 11), buf[13], buf[14], buf[15]}
 				fb.Server.Handler.ProcessSetPixelFormat(fb, pf)
 
 			case 2: // Set Encoding
@@ -330,6 +330,8 @@ func (fb *RFBConn) processClientRequest() {
 				}
 				cuttext := string(buf2)
 				fb.Server.Handler.ProcessCutText(fb, cuttext)
+			default:
+				log.Printf("Unknown cmd received (%d)\n", buf[0])
 			}
 		} else {
 			if err != nil {
@@ -372,7 +374,7 @@ func (fb *RFBConn) SendCutText(text string) error {
 // buf is the actual image data that is in the format indicated by the PixelFormat
 func (fb *RFBConn) SendRectangle(x, y, width, height int, buf []byte) error {
 	tmpbuf := make([]byte, 16+len(buf))
-	buf[0] = 0              // Command byte
+	tmpbuf[0] = 0           // Command byte
 	SetUint16(tmpbuf, 2, 1) // Number of rectangles
 	SetUint16(tmpbuf, 4, uint16(x))
 	SetUint16(tmpbuf, 6, uint16(y))
