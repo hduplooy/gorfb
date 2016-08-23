@@ -6,6 +6,7 @@ For an example on how to use this please look at [hduplooy/gorfb-examples](https
 
 ### Current Issues
 
-The library works fine for most VNC clients, but some have a problem with bytes that are out of place. Just need to make provision for it.
+The raw format is obviously a bit slow when working over the internet. So the next step is implementing one of the encodings used by the protocol. I'll probably first look at TRLE and then ZRLE.
+
 
 
