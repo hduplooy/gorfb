@@ -4,7 +4,7 @@ Remote Frame Buffer implementation in Golang according to the [RFC 6143 specific
 
 For an example on how to use this please look at [hduplooy/gorfb-examples](https://github.com/hduplooy/gorfb-examples).
 
-## Current Issues
+### Current Issues
 
 The library works fine for most VNC clients, but some have a problem with bytes that are out of place. Just need to make provision for it.
 
