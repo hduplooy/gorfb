@@ -90,6 +90,11 @@ type RFBServerHandler interface {
 	ProcessCutText(conn *RFBConn, text string)
 }
 
+type RFBRectangle struct {
+	X, Y, Width, Height int
+	Buffer              []byte
+}
+
 // agreeProtocol is used to first agree on RFB3.8 as the protocol to use
 // if an error is experienced at any point false is returned
 func (fb *RFBConn) agreeProtocol() bool {
@@ -266,7 +271,19 @@ func (fb *RFBConn) processClientRequest() {
 				}
 				pf := PixelFormat{buf[3], buf[4], buf[5], buf[6], GetUint16(buf, 7), GetUint16(buf, 9), GetUint16(buf, 11), buf[13], buf[14], buf[15]}
 				fb.Server.Handler.ProcessSetPixelFormat(fb, pf)
-
+			case 1: // FixColorMapEntries - not part of RFB 3.8 but some VNC clients send it anyway. We just ignore it
+				_, err := fb.Conn.Read(buf[:6])
+				if err != nil {
+					log.Printf("Error reading FixColorMapEntries (1): %s\n", err.Error())
+					return
+				}
+				cnt := int(GetUint16(buf, 4))
+				tmpbuf := make([]byte, 6*cnt)
+				_, err = fb.Conn.Read(tmpbuf)
+				if err != nil {
+					log.Printf("Error reading FixColorMapEntries (2): %s\n", err.Error())
+					return
+				}
 			case 2: // Set Encoding
 				_, err := fb.Conn.Read(buf[:3]) // Read 3 bytes with encoding count (number of encodings following)
 				if err != nil {
@@ -372,19 +389,26 @@ func (fb *RFBConn) SendCutText(text string) error {
 // SendRectangle sends a rectangle of image information to the client
 // x,y,width,height is the bounds of the rectangle
 // buf is the actual image data that is in the format indicated by the PixelFormat
-func (fb *RFBConn) SendRectangle(x, y, width, height int, buf []byte) error {
-	tmpbuf := make([]byte, 16+len(buf))
-	tmpbuf[0] = 0           // Command byte
-	SetUint16(tmpbuf, 2, 1) // Number of rectangles
-	SetUint16(tmpbuf, 4, uint16(x))
-	SetUint16(tmpbuf, 6, uint16(y))
-	SetUint16(tmpbuf, 8, uint16(width))
-	SetUint16(tmpbuf, 10, uint16(height))
-	SetUint32(tmpbuf, 12, uint32(0)) // Encoding = Raw. Will change as other encodings are implemented
-	copy(tmpbuf[16:], buf)
+func (fb *RFBConn) SendRectangles(rects []RFBRectangle) error { //x, y, width, height int, buf []byte) error {
+	tmpbuf := make([]byte, 4)
+	tmpbuf[0] = 0                            // Command byte
+	SetUint16(tmpbuf, 2, uint16(len(rects))) // Number of rectangles
 	_, err := fb.Conn.Write(tmpbuf)
 	if err != nil {
 		return err
+	}
+	for _, rect := range rects {
+		tmpbuf = make([]byte, 12+len(rect.Buffer))
+		SetUint16(tmpbuf, 0, uint16(rect.X))
+		SetUint16(tmpbuf, 2, uint16(rect.Y))
+		SetUint16(tmpbuf, 4, uint16(rect.Width))
+		SetUint16(tmpbuf, 6, uint16(rect.Height))
+		SetUint32(tmpbuf, 8, uint32(0)) // Encoding = Raw. Will change as other encodings are implemented
+		copy(tmpbuf[12:], rect.Buffer)
+		_, err := fb.Conn.Write(tmpbuf)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
