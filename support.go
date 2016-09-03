@@ -1,4 +1,6 @@
 // github.com/hduplooy/gorfb project support.go
+// Author: Hannes du Plooy
+// Revision Date: 21 Aug 2016
 // Functions to support the network actions
 package gorfb
 
