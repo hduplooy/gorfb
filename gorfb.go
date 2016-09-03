@@ -1,4 +1,7 @@
 // gorfb project gorfb.go
+// Author: Hannes du Plooy
+// Revision Date: 26 Aug 2016
+// RFB (VNC) implementation in golang
 package gorfb
 
 import (
