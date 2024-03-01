@@ -2,7 +2,7 @@
 
 ## RFB (VNC) Protocol implementation in golang
 
-Remote Frame Buffer implementation in Golang according to the [RFC 6143 specification](http://www.rfc-base.org/txt/rfc-6143.txt). Please note that this is a work in progress and something I play with at the moment, it is not used in any production implementations (yet). At the moment the server side is provided with a client side being contemplated.
+Remote Frame Buffer implementation in Golang according to the [RFC 6143 specification](http://www.faqs.org/rfcs/rfc6143.html). Please note that this is a work in progress and something I play with at the moment, it is not used in any production implementations (yet). At the moment the server side is provided with a client side being contemplated.
 
 For an example on how to use this please look at [hduplooy/gorfb-conway](https://github.com/hduplooy/gorfb-conway).
 
